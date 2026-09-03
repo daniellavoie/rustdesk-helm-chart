@@ -125,6 +125,14 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
+            {{/*
+              The image hardcodes HOME=/root, which readOnlyRootFilesystem makes unwritable,
+              so hbb_common logs "Failed to store config: Failed to create directory" twice
+              on every start. Pointing HOME at the volume silences it; it writes a small
+              .config/rustdesk/RustDesk.toml there.
+            */}}
+            - name: HOME
+              value: {{ .Values.hbbs.dataDir | quote }}
             - name: ALWAYS_USE_RELAY
               value: {{ ternary "Y" "N" .Values.hbbs.config.alwaysUseRelay | quote }}
             {{- with .Values.hbbs.config.dbUrl }}

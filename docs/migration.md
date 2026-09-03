@@ -67,8 +67,9 @@ helm install rustdesk oci://ghcr.io/daniellavoie/helm-charts/rustdesk-server -f 
 ## Step 4 (optional): bring the database
 
 Create the PVC and copy `db_v2.sqlite3` into it before first start, then point the chart at
-it with `hbbs.persistence.existingClaim`. Copy any `db_v2.sqlite3-wal` and `-shm` files
-alongside it if they exist.
+it with `hbbs.persistence.existingClaim`. SQLite runs in WAL mode, so copy
+`db_v2.sqlite3-wal` and `db_v2.sqlite3-shm` alongside the database — with the server stopped,
+or the copy may be inconsistent.
 
 ## Step 5: cut over
 

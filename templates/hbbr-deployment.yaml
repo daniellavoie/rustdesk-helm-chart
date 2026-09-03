@@ -90,6 +90,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
+            {{/* See the hbbs template: HOME must be writable or startup logs spurious errors. */}}
+            - name: HOME
+              value: {{ .Values.hbbr.dataDir | quote }}
             {{- include "rustdesk-server.hbbr.keyEnv" . | nindent 12 }}
             - name: SINGLE_BANDWIDTH
               value: {{ .Values.hbbr.config.singleBandwidth | quote }}
