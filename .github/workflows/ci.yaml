@@ -89,11 +89,21 @@ jobs:
 
       - uses: helm/chart-testing-action@v2.7.0
 
+      # Installed directly rather than through a third-party action. The popular one pins
+      # k3d v5.4.6, whose download URL now 404s, and doing it by hand is four lines with
+      # one fewer unmaintained dependency.
       - name: Create k3d cluster
-        uses: AbsaOSS/k3d-action@v2
-        with:
-          cluster-name: rustdesk-ci
-          args: --agents 1 --image docker.io/rancher/k3s:v1.31.4-k3s1
+        env:
+          K3D_VERSION: v5.9.0
+          K3S_IMAGE: docker.io/rancher/k3s:v1.31.4-k3s1
+        run: |
+          set -eu
+          curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+            | TAG="$K3D_VERSION" bash
+          k3d version
+          k3d cluster create rustdesk-ci --agents 1 --image "$K3S_IMAGE" --wait
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+          kubectl get nodes
 
       - name: ct lint
         run: ct lint --config ct.yaml --check-version-increment=false
