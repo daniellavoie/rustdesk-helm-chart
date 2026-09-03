@@ -1,0 +1,83 @@
+{{- if .Values.hbbs.enabled }}
+{{- $name := include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbs") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+  ports:
+    - name: rendezvous-tcp
+      port: {{ .Values.hbbs.port }}
+      targetPort: rendezvous-tcp
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+  {{- with .Values.hbbs.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.hbbs.service.type }}
+  {{- if eq .Values.hbbs.service.type "LoadBalancer" }}
+  {{- with .Values.hbbs.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.hbbs.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if has .Values.hbbs.service.type (list "LoadBalancer" "NodePort") }}
+  {{/*
+    Local, not Cluster. hbbs records the observed packet source as the peer's NAT endpoint
+    and hands it to the other peer to dial; Cluster rewrites that address and every session
+    silently falls back through the relay while still looking healthy.
+  */}}
+  externalTrafficPolicy: {{ .Values.hbbs.service.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+  ports:
+    - name: nat-test
+      port: {{ include "rustdesk-server.hbbs.natTestPort" . }}
+      targetPort: nat-test
+      protocol: TCP
+      {{- if and (eq .Values.hbbs.service.type "NodePort") .Values.hbbs.service.nodePorts.natTest }}
+      nodePort: {{ .Values.hbbs.service.nodePorts.natTest }}
+      {{- end }}
+    - name: rendezvous-tcp
+      port: {{ .Values.hbbs.port }}
+      targetPort: rendezvous-tcp
+      protocol: TCP
+      {{- if and (eq .Values.hbbs.service.type "NodePort") .Values.hbbs.service.nodePorts.main }}
+      nodePort: {{ .Values.hbbs.service.nodePorts.main }}
+      {{- end }}
+    {{/* The UDP port carries registration and heartbeat. Without it nothing works. */}}
+    - name: rendezvous-udp
+      port: {{ .Values.hbbs.port }}
+      targetPort: rendezvous-udp
+      protocol: UDP
+      {{- if and (eq .Values.hbbs.service.type "NodePort") .Values.hbbs.service.nodePorts.main }}
+      nodePort: {{ .Values.hbbs.service.nodePorts.main }}
+      {{- end }}
+    {{- if .Values.hbbs.webClient.enabled }}
+    - name: ws
+      port: {{ include "rustdesk-server.hbbs.wsPort" . }}
+      targetPort: ws
+      protocol: TCP
+      {{- if and (eq .Values.hbbs.service.type "NodePort") .Values.hbbs.service.nodePorts.websocket }}
+      nodePort: {{ .Values.hbbs.service.nodePorts.websocket }}
+      {{- end }}
+    {{- end }}
+{{- end }}

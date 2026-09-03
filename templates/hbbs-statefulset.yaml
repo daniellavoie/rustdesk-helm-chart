@@ -1,0 +1,207 @@
+{{- if .Values.hbbs.enabled }}
+{{- $name := include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbs") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+spec:
+  {{/*
+    Exactly one replica, always. Peer liveness and the pending-punch map live in memory,
+    SQLite runs a connection pool of 1, and the volume is ReadWriteOnce. A second replica
+    cannot answer a punch-hole request for a peer that heartbeats to the first.
+  */}}
+  replicas: 1
+  serviceName: {{ $name }}-headless
+  selector:
+    matchLabels:
+      {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbs") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbs") | nindent 8 }}
+        {{- with .Values.hbbs.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.hbbs.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{/* The server needs no API access; only the install-time key hook does. */}}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.hbbs.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.hbbs.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.hbbs.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbs.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbs.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbs.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbs.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{/*
+          The Secret is authoritative and the volume is a cache of it. Copying on every
+          start means a lost volume costs nothing, while a lost Secret is the only thing
+          that can disconnect enrolled clients.
+        */}}
+        - name: key-materialize
+          image: {{ include "rustdesk-server.utilsImage" . }}
+          imagePullPolicy: {{ .Values.utilsImage.pullPolicy }}
+          {{- with .Values.hbbs.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              umask 077
+              # tr strips any trailing newline. A hand-created Secret usually has one, and
+              # the relay compares this value byte for byte with no trimming.
+              tr -d '\r\n' < /keysrc/id_ed25519 > {{ .Values.hbbs.dataDir }}/id_ed25519
+              tr -d '\r\n' < /keysrc/id_ed25519.pub > {{ .Values.hbbs.dataDir }}/id_ed25519.pub
+              chmod 0600 {{ .Values.hbbs.dataDir }}/id_ed25519
+              echo "Key materialized. Public key: $(cat {{ .Values.hbbs.dataDir }}/id_ed25519.pub)"
+          volumeMounts:
+            - name: keysrc
+              mountPath: /keysrc
+              readOnly: true
+            - name: data
+              mountPath: {{ .Values.hbbs.dataDir }}
+      containers:
+        - name: hbbs
+          image: {{ include "rustdesk-server.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.hbbs.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{/*
+            Both binaries write relative to their working directory. Pointing it at the
+            volume is what lets the root filesystem be read-only.
+          */}}
+          workingDir: {{ .Values.hbbs.dataDir }}
+          command: ["/usr/bin/hbbs"]
+          args:
+            {{/*
+              `_` means load-or-generate, and makes hbbs enforce the key against clients.
+              An EMPTY key would also load the file and sign correctly but leaves
+              enforcement off, so the KEY environment variable is never set here.
+            */}}
+            - -k
+            - "_"
+            - -p
+            - {{ .Values.hbbs.port | quote }}
+            {{- with .Values.hbbs.config.relayServers }}
+            - -r
+            - {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.hbbs.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: ALWAYS_USE_RELAY
+              value: {{ ternary "Y" "N" .Values.hbbs.config.alwaysUseRelay | quote }}
+            {{- with .Values.hbbs.config.dbUrl }}
+            - name: DB_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.hbbs.config.rmem }}
+            - name: RMEM
+              value: {{ .Values.hbbs.config.rmem | quote }}
+            {{- end }}
+            {{- if not .Values.hbbs.config.selfTest }}
+            - name: TEST_HBBS
+              value: "no"
+            {{- end }}
+            {{- with .Values.hbbs.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: nat-test
+              containerPort: {{ include "rustdesk-server.hbbs.natTestPort" . }}
+              protocol: TCP
+            - name: rendezvous-tcp
+              containerPort: {{ .Values.hbbs.port }}
+              protocol: TCP
+            - name: rendezvous-udp
+              containerPort: {{ .Values.hbbs.port }}
+              protocol: UDP
+            {{- if .Values.hbbs.webClient.enabled }}
+            - name: ws
+              containerPort: {{ include "rustdesk-server.hbbs.wsPort" . }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.hbbs.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: rendezvous-tcp
+            initialDelaySeconds: {{ .Values.hbbs.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hbbs.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.hbbs.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.hbbs.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.hbbs.livenessProbe.enabled }}
+          {{/*
+            A TCP probe cannot see the UDP listener, which is the one that matters. hbbs
+            covers that itself: it pings its own UDP socket once a second and exits(1) if
+            replies stop for 12 seconds, so the kubelet restarts it.
+          */}}
+          livenessProbe:
+            tcpSocket:
+              port: rendezvous-tcp
+            initialDelaySeconds: {{ .Values.hbbs.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hbbs.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.hbbs.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.hbbs.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- with .Values.hbbs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.hbbs.dataDir }}
+      volumes:
+        - name: keysrc
+          secret:
+            secretName: {{ include "rustdesk-server.keySecretName" . }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.key.privateKeyKey }}
+                path: id_ed25519
+              - key: {{ .Values.key.publicKeyKey }}
+                path: id_ed25519.pub
+        - name: data
+        {{- if .Values.hbbs.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "rustdesk-server.hbbs.pvcName" . }}
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+{{- end }}

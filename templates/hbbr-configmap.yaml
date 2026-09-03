@@ -1,0 +1,22 @@
+{{- if and .Values.hbbr.enabled .Values.hbbr.lists.enabled }}
+{{/*
+hbbr reads these once at startup from its working directory. Edits made through its runtime
+console are in-memory only and vanish on restart, so a ConfigMap is the only durable form.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbr") }}-lists
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbr") | nindent 4 }}
+data:
+  blacklist.txt: |
+    {{- range .Values.hbbr.lists.blacklist }}
+    {{ . }}
+    {{- end }}
+  blocklist.txt: |
+    {{- range .Values.hbbr.lists.blocklist }}
+    {{ . }}
+    {{- end }}
+{{- end }}

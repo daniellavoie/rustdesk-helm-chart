@@ -1,0 +1,45 @@
+{{- if .Values.hbbr.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbr") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbr") | nindent 4 }}
+  {{- with .Values.hbbr.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.hbbr.service.type }}
+  {{- if eq .Values.hbbr.service.type "LoadBalancer" }}
+  {{- with .Values.hbbr.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.hbbr.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if has .Values.hbbr.service.type (list "LoadBalancer" "NodePort") }}
+  externalTrafficPolicy: {{ .Values.hbbr.service.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbr") | nindent 4 }}
+  ports:
+    - name: relay
+      port: {{ .Values.hbbr.port }}
+      targetPort: relay
+      protocol: TCP
+      {{- if and (eq .Values.hbbr.service.type "NodePort") .Values.hbbr.service.nodePorts.main }}
+      nodePort: {{ .Values.hbbr.service.nodePorts.main }}
+      {{- end }}
+    {{- if .Values.hbbr.webClient.enabled }}
+    - name: relay-ws
+      port: {{ include "rustdesk-server.hbbr.wsPort" . }}
+      targetPort: relay-ws
+      protocol: TCP
+      {{- if and (eq .Values.hbbr.service.type "NodePort") .Values.hbbr.service.nodePorts.websocket }}
+      nodePort: {{ .Values.hbbr.service.nodePorts.websocket }}
+      {{- end }}
+    {{- end }}
+{{- end }}

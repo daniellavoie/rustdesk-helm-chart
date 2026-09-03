@@ -1,0 +1,110 @@
+{{ .Chart.Name }} {{ .Chart.Version }} (RustDesk server {{ default .Chart.AppVersion .Values.image.tag }}) installed as {{ .Release.Name }}.
+
+{{- if .Values.hbbs.enabled }}
+
+1. Get the public key. Clients need it, and you should back it up — losing it disconnects
+   every enrolled client permanently:
+
+     kubectl get secret -n {{ .Release.Namespace }} {{ include "rustdesk-server.keySecretName" . }} \
+       -o jsonpath='{.data.{{ .Values.key.publicKeyKey | replace "." "\\." }}}' | base64 -d; echo
+
+   The Secret is the source of truth; the volume is only a cache of it. It is not owned by
+   Helm, so it deliberately survives `helm uninstall` and a later reinstall will reuse it.
+
+2. Find the address clients should use:
+{{- if eq .Values.hbbs.service.type "LoadBalancer" }}
+
+     kubectl get svc -n {{ .Release.Namespace }} {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbs") }} \
+       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; echo
+
+   If that address is private and clients reach you through NAT, use your PUBLIC hostname or
+   IP below instead, and forward these ports to the Service addresses:
+
+     {{ include "rustdesk-server.hbbs.natTestPort" . }}/tcp, {{ .Values.hbbs.port }}/tcp and {{ .Values.hbbs.port }}/udp  -> hbbs
+     {{- if .Values.hbbr.enabled }}
+     {{ .Values.hbbr.port }}/tcp                             -> hbbr
+     {{- end }}
+{{- else if eq .Values.hbbs.service.type "NodePort" }}
+
+     kubectl get svc -n {{ .Release.Namespace }} {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbs") }} \
+       -o jsonpath='{range .spec.ports[*]}{.name}{"\t"}{.port}/{.protocol}{"\t-> node:"}{.nodePort}{"\n"}{end}'
+
+   Point your port forwarder at those node ports, from the PUBLIC ports clients expect:
+
+     {{ include "rustdesk-server.hbbs.natTestPort" . }}/tcp, {{ .Values.hbbs.port }}/tcp and {{ .Values.hbbs.port }}/udp  -> hbbs node ports
+     {{- if .Values.hbbr.enabled }}
+     {{ .Values.hbbr.port }}/tcp                          -> hbbr node port
+     {{- end }}
+
+   Note that {{ .Values.hbbs.port }} needs BOTH a TCP and a UDP forward. They are separate rules on
+   most forwarders, and each protocol gets its own node port.
+{{- else }}
+
+   Service type is {{ .Values.hbbs.service.type }}. Clients must reach {{ .Values.hbbs.port }}/tcp AND {{ .Values.hbbs.port }}/udp.
+{{- end }}
+
+3. Configure each client — Settings, Network, ID/Relay Server:
+
+     ID Server:  <your public host>{{ if ne (int .Values.hbbs.port) 21116 }}:{{ .Values.hbbs.port }}{{ end }}
+     Key:        <the public key from step 1>
+     Relay Server: leave EMPTY
+{{- if .Values.hbbs.config.relayServers }}
+
+   Note: this release passes an explicit relay list ({{ join ", " .Values.hbbs.config.relayServers }}),
+   which overrides the derivation below.
+{{- else }}
+
+   Leaving the relay empty is correct, not incomplete. hbbs advertises no relay address; the
+   client derives it as <your ID server host>:<its port + 1>, so {{ .Values.hbbs.port }} implies {{ add (int .Values.hbbs.port) 1 }}.
+{{- if ne (int .Values.hbbs.port) 21116 }}
+
+   WARNING: you changed hbbs.port to {{ .Values.hbbs.port }}, so clients will derive port {{ add (int .Values.hbbs.port) 1 }} for the
+   relay. Your relay listens on {{ .Values.hbbr.port }}. Unless those match, set hbbs.config.relayServers
+   explicitly or relayed sessions will fail.
+{{- end }}
+{{- end }}
+{{- else }}
+
+This is a relay-only release: hbbr is running without hbbs. Add its address to the
+hbbs.config.relayServers list of the release that runs hbbs.
+{{- end }}
+
+{{- if and (eq .Values.hbbs.service.type "LoadBalancer") (ne .Values.hbbs.service.externalTrafficPolicy "Local") }}
+
+WARNING: hbbs.service.externalTrafficPolicy is "{{ .Values.hbbs.service.externalTrafficPolicy }}", not "Local". The source address
+of every client will be rewritten, so hbbs will hand peers the wrong endpoint for hole
+punching. Sessions will still connect — through the relay, every time — which makes this
+look like a working install while consuming relay bandwidth for traffic that should be
+peer to peer.
+{{- end }}
+{{- range $role := (list "hbbs" "hbbr") }}
+{{- $cfg := index $.Values $role }}
+{{- if and $cfg.enabled (eq $cfg.service.type "NodePort") (eq $cfg.service.externalTrafficPolicy "Local") (not $cfg.nodeSelector) (not $cfg.affinity) }}
+
+WARNING: {{ $role }} uses NodePort with externalTrafficPolicy "Local" and is not pinned to a node.
+"Local" means ONLY the node currently running the {{ $role }} pod answers on its node port; every
+other node drops the traffic silently. If your port forwarder targets a fixed node -- and most
+do, since they cannot see Endpoints -- it will point at a black hole whenever the pod is
+scheduled elsewhere, and nothing will report an error.
+
+Either pin the pod with {{ $role }}.nodeSelector or {{ $role }}.affinity and target that same node,
+or point the forwarder at an address that follows the pod. Do NOT "fix" this by switching to
+externalTrafficPolicy "Cluster": that rewrites the client source address, and every session
+will silently fall back through the relay.
+{{- end }}
+{{- end }}
+
+{{- if and .Values.hbbr.enabled (not .Values.hbbr.key.validation) }}
+
+WARNING: hbbr.key.validation is disabled. This relay will forward traffic for anyone who
+knows its address, at up to {{ .Values.hbbr.config.singleBandwidth }} Mb/s per connection and {{ .Values.hbbr.config.totalBandwidth }} Mb/s in total.
+{{- end }}
+{{- if or .Values.hbbs.webClient.enabled .Values.hbbr.webClient.enabled }}
+
+WARNING: the WebSocket ports are enabled. They accept X-Real-IP and X-Forwarded-For without
+validation and overwrite the peer address with them, so anyone who reaches them directly can
+claim any source IP. Expose them only behind a proxy that OVERWRITES both headers.
+{{- end }}
+
+Run `helm test {{ .Release.Name }} -n {{ .Release.Namespace }}` to verify the Services have endpoints.
+Troubleshooting, keyed by symptom: https://github.com/daniellavoie/rustdesk-helm-chart/blob/main/docs/troubleshooting.md

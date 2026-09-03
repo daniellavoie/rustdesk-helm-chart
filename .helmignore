@@ -1,0 +1,11 @@
+.DS_Store
+.git/
+.gitignore
+.github/
+.vscode/
+ct.yaml
+renovate.json
+ci/
+docs/
+CONTEXT.md
+README.md.gotmpl

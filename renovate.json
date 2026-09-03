@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "Upstream server releases arrive as a reviewable PR that CI gates, rather than through a floating tag.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["rustdesk/rustdesk-server", "rustdesk/rustdesk-server-s6"],
+      "groupName": "rustdesk-server",
+      "commitMessageTopic": "RustDesk server"
+    }
+  ],
+  "helm-values": { "managerFilePatterns": ["/values\\.yaml$/"] },
+  "regexManagers": [
+    {
+      "description": "appVersion in Chart.yaml tracks the upstream server release",
+      "fileMatch": ["^Chart\\.yaml$"],
+      "matchStrings": ["appVersion:\\s*\"(?<currentValue>.*)\""],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "rustdesk/rustdesk-server"
+    }
+  ]
+}

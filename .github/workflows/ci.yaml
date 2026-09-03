@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Lint and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: helm lint
+        run: helm lint . --strict
+
+      - name: Guardrails reject what they should
+        run: |
+          set -eu
+          # The schema exists to turn silent misconfiguration into an install-time error.
+          # If these stop failing, it has stopped doing its job.
+          expect_fail() {
+            if helm template t . "$@" >/dev/null 2>&1; then
+              echo "FAIL: expected schema to reject: $*" >&2; exit 1
+            fi
+            echo "ok, rejected: $*"
+          }
+          expect_fail --set hbbs.enabledd=true
+          expect_fail --set hbbr.replicaCount=2
+          expect_fail --set hbbs.service.externalTrafficPolicy=Wrong
+          expect_fail --set hbbs.service.type=Bogus
+          # A relay-only release must refuse to start an unvalidated relay open to anyone.
+          expect_fail --set hbbs.enabled=false
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLo /tmp/kc.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kc.tar.gz -C /tmp && sudo mv /tmp/kubeconform /usr/local/bin/
+
+      - name: kubeconform across value permutations
+        run: |
+          set -eu
+          check() {
+            desc="$1"; shift
+            echo "--- $desc"
+            helm template t . "$@" | kubeconform -strict -summary \
+              -kubernetes-version 1.31.0 -schema-location default
+          }
+          check "defaults"
+          check "web client + netpol + lists" \
+            --set hbbs.webClient.enabled=true --set hbbr.webClient.enabled=true \
+            --set networkPolicy.enabled=true --set hbbr.lists.enabled=true \
+            --set hbbr.lists.blacklist='{1.2.3.4}'
+          check "hostNetwork" --set hbbs.hostNetwork=true --set hbbr.hostNetwork=true
+          check "NodePort" --set hbbs.service.type=NodePort --set hbbr.service.type=NodePort
+          check "relay-only" --set hbbs.enabled=false --set hbbr.key.publicKey=abc
+          check "existing secret" --set key.existingSecret=k --set rbac.create=false \
+            --set serviceAccount.create=false
+          check "multi-relay" --set hbbs.config.relayServers='{a.example.com,b.example.com}'
+
+      - name: README is in sync with values.yaml
+        run: |
+          docker run --rm -v "$PWD:/helm-docs" -u "$(id -u)" jnorwood/helm-docs:v1.14.2 \
+            --template-files=README.md.gotmpl
+          git diff --exit-code README.md || {
+            echo "README.md is stale. Run helm-docs and commit the result." >&2; exit 1; }
+
+  install:
+    name: Install on k3d
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - uses: helm/chart-testing-action@v2.7.0
+
+      - name: Create k3d cluster
+        uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: rustdesk-ci
+          args: --agents 1 --image docker.io/rancher/k3s:v1.31.4-k3s1
+
+      - name: ct lint
+        run: ct lint --config ct.yaml --check-version-increment=false
+
+      - name: ct install
+        run: ct install --config ct.yaml
+
+      # Q32's migration path: importing an existing key must work, because that is what
+      # lets people move without disconnecting every enrolled client.
+      - name: Install with an imported key pair
+        run: |
+          set -eu
+          pair=$(docker run --rm --entrypoint rustdesk-utils rustdesk/rustdesk-server-s6:1.1.16 genkeypair)
+          pub=$(printf '%s\n' "$pair" | sed -n 's/^Public Key:[[:space:]]*//p')
+          priv=$(printf '%s\n' "$pair" | sed -n 's/^Secret Key:[[:space:]]*//p')
+          printf '%s' "$priv" > id_ed25519
+          printf '%s' "$pub"  > id_ed25519.pub
+
+          kubectl create namespace imported
+          kubectl -n imported create secret generic rustdesk-key \
+            --from-file=id_ed25519=id_ed25519 --from-file=id_ed25519.pub=id_ed25519.pub
+
+          helm install imported . -n imported --wait --timeout 300s \
+            -f ci/ci-values.yaml \
+            --set key.existingSecret=rustdesk-key \
+            --set rbac.create=false --set serviceAccount.create=false
+
+          # The chart must have adopted the supplied key rather than generating a new one:
+          # a new key here would silently disconnect every enrolled client on a real migration.
+          got=$(kubectl -n imported get secret rustdesk-key \
+            -o jsonpath='{.data.id_ed25519\.pub}' | base64 -d)
+          test "$got" = "$pub" || { echo "imported key was replaced!" >&2; exit 1; }
+          test -z "$(kubectl -n imported get job -o name 2>/dev/null)" \
+            || { echo "key-init hook ran despite existingSecret" >&2; exit 1; }
+
+          helm test imported -n imported

@@ -1,0 +1,30 @@
+{{- if and .Values.hbbs.enabled .Values.hbbs.persistence.enabled (not .Values.hbbs.persistence.existingClaim) }}
+{{/*
+An ordinary PVC rather than a StatefulSet volumeClaimTemplate: a claim template derives PVC
+names from the replica ordinal and cannot be pointed at a volume that already exists, which
+would block both migration from another install and restore from backup.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rustdesk-server.hbbs.pvcName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbs") | nindent 4 }}
+  annotations:
+    {{- if .Values.hbbs.persistence.retain }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with .Values.hbbs.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.hbbs.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.hbbs.persistence.size | quote }}
+  {{- if .Values.hbbs.persistence.storageClass }}
+  storageClassName: {{ .Values.hbbs.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}

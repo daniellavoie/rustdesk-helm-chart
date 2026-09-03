@@ -1,0 +1,64 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- range $role := (list "hbbs" "hbbr") }}
+{{- $cfg := index $.Values $role }}
+{{- if $cfg.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rustdesk-server.roleFullname" (dict "ctx" $ "role" $role) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" $ "role" $role) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" $ "role" $role) | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{/*
+    Ingress must allow the world: these pods are deliberately reachable from any client on
+    the internet, so this half of the policy restricts almost nothing and exists only so the
+    pods still work under a default-deny policy. The egress half is where the value is.
+  */}}
+  ingress:
+    - ports:
+        {{- if eq $role "hbbs" }}
+        - port: {{ include "rustdesk-server.hbbs.natTestPort" $ }}
+          protocol: TCP
+        - port: {{ $.Values.hbbs.port }}
+          protocol: TCP
+        - port: {{ $.Values.hbbs.port }}
+          protocol: UDP
+        {{- if $.Values.hbbs.webClient.enabled }}
+        - port: {{ include "rustdesk-server.hbbs.wsPort" $ }}
+          protocol: TCP
+        {{- end }}
+        {{- else }}
+        - port: {{ $.Values.hbbr.port }}
+          protocol: TCP
+        {{- if $.Values.hbbr.webClient.enabled }}
+        - port: {{ include "rustdesk-server.hbbr.wsPort" $ }}
+          protocol: TCP
+        {{- end }}
+        {{- end }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if and (eq $role "hbbs") (gt (len $.Values.hbbs.config.relayServers) 1) }}
+    {{/*
+      hbbs only starts its relay health check when more than one relay is configured; that
+      check is the sole outbound connection it makes.
+    */}}
+    - {}
+    {{- end }}
+    {{- with $.Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

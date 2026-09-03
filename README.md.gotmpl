@@ -1,0 +1,100 @@
+# {{ template "chart.name" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}{{ template "chart.appVersionBadge" . }}
+
+A Helm chart for the self-hosted [RustDesk server](https://github.com/rustdesk/rustdesk-server),
+built around the three things that make RustDesk unusual to run on Kubernetes: it needs the
+client's real source IP, its identity lives in a key pair that must never change, and only one
+of its two roles can be scaled.
+
+## Install
+
+```bash
+helm install rustdesk oci://ghcr.io/daniellavoie/helm-charts/rustdesk-server
+```
+
+Then follow the notes printed on install: read the public key out of the Secret, point clients
+at your address, and leave their relay field empty.
+
+## What this chart does differently
+
+**The key pair survives.** The installation's identity is an Ed25519 pair that clients pin at
+enrollment; if it changes, every enrolled client stops connecting. An init hook generates it
+into a Secret that Helm does not own, so it survives `helm uninstall` and is reused on
+reinstall. The volume is only a cache of that Secret, so losing the volume costs nothing.
+Bring your own with `key.existingSecret` — see [migration](docs/migration.md).
+
+**The relay validates clients, without holding the private key.** Upstream leaves relay
+validation off by default, which makes the relay usable by anyone who finds it. This chart
+turns it on. hbbr only ever receives the public half — it compares an opaque string and
+performs no cryptography — so the private key never leaves the hbbs pod.
+
+**Source IP preservation is treated as correctness.** `externalTrafficPolicy: Local` is the
+default because hbbs stores the observed packet source as a peer's NAT endpoint. Get this
+wrong and everything still works, just relayed, forever. `hostNetwork` is supported as an
+opt-in.
+
+**The roles are separate workloads.** hbbs is a single-replica StatefulSet with a volume; hbbr
+is stateless and can be deployed on its own as a relay-only release. Neither can be scaled by
+replica count — see [ADR-0001](docs/adr/0001-split-roles-classic-image.md) for why the relay
+in particular cannot.
+
+## Requirements
+
+Kubernetes 1.26 or newer. The floor is enforced in `Chart.yaml` because hbbs needs TCP and UDP
+on the same port, and mixed-protocol LoadBalancer Services only became generally available in
+1.26 — below that the UDP port is silently dropped and client registration never works.
+
+Developed and validated against k3s with MetalLB.
+
+## Ports
+
+| Port | Protocol | Role | Purpose | Default |
+|------|----------|------|---------|---------|
+| 21115 | TCP | hbbs | NAT type test | on |
+| 21116 | TCP | hbbs | Rendezvous, TCP hole punching | on |
+| 21116 | **UDP** | hbbs | ID registration and heartbeat | on |
+| 21117 | TCP | hbbr | Relay | on |
+| 21118 | TCP | hbbs | WebSocket rendezvous (web client) | **off** |
+| 21119 | TCP | hbbr | WebSocket relay (web client) | **off** |
+
+21118 and 21119 are off because they accept `X-Real-IP` and `X-Forwarded-For` without
+validation and overwrite the peer address with them. Enable them only behind a proxy that
+overwrites both headers. This chart ships no Ingress —
+[ADR-0006](docs/adr/0006-no-ingress-web-client-ports-off.md) explains why.
+
+## Verifying the chart
+
+Releases are signed with [cosign](https://docs.sigstore.dev/) keyless signing, tied to the
+GitHub Actions workflow that built them:
+
+```bash
+cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:{{ template "chart.version" . }} \
+  --certificate-identity-regexp 'https://github.com/daniellavoie/rustdesk-helm-chart/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+## Documentation
+
+- [Exposing the server](docs/exposure.md) — LoadBalancer, NodePort behind a port forwarder,
+  hostNetwork, and the traps in each
+- [Troubleshooting, by symptom](docs/troubleshooting.md) — start here when something is
+  subtly wrong, which is how this software usually fails
+- [Migrating an existing installation](docs/migration.md)
+- [Architecture decisions](docs/adr/) — why the chart is shaped this way
+- [Domain glossary](CONTEXT.md)
+
+{{ template "chart.valuesSection" . }}
+
+## Contributing
+
+`helm lint`, `kubeconform`, and a real install on k3d run in CI. Note that CI cannot exercise
+the default LoadBalancer path — k3d has no MetalLB — so changes to Service templates need
+testing on a real cluster.
+
+## Licence
+
+Apache-2.0. This chart is not a derivative work of the RustDesk server; it references
+its images.

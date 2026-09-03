@@ -1,0 +1,74 @@
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "rustdesk-server.fullname" . }}-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: {{ include "rustdesk-server.utilsImage" . }}
+      imagePullPolicy: {{ .Values.utilsImage.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          fail=0
+          # This runs inside the cluster, so it cannot exercise the LoadBalancer path,
+          # externalTrafficPolicy, or UDP. It checks that the Services have endpoints and
+          # that key material exists — the two things that are usually wrong.
+          {{- if .Values.hbbs.enabled }}
+          echo "checking hbbs rendezvous port..."
+          nc -z -w 5 {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbs") }} {{ .Values.hbbs.port }} \
+            && echo "  hbbs tcp/{{ .Values.hbbs.port }} OK" || { echo "  hbbs tcp/{{ .Values.hbbs.port }} FAILED"; fail=1; }
+          echo "checking key material..."
+          if [ -s /keysrc/id_ed25519.pub ] && [ -s /keysrc/id_ed25519 ]; then
+            echo "  key pair present, public key: $(cat /keysrc/id_ed25519.pub)"
+          else
+            echo "  key pair MISSING or empty"; fail=1
+          fi
+          {{- end }}
+          {{- if .Values.hbbr.enabled }}
+          echo "checking hbbr relay port..."
+          nc -z -w 5 {{ include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbr") }} {{ .Values.hbbr.port }} \
+            && echo "  hbbr tcp/{{ .Values.hbbr.port }} OK" || { echo "  hbbr tcp/{{ .Values.hbbr.port }} FAILED"; fail=1; }
+          {{- end }}
+          exit $fail
+      {{- if .Values.hbbs.enabled }}
+      volumeMounts:
+        - name: keysrc
+          mountPath: /keysrc
+          readOnly: true
+      {{- end }}
+  {{- if .Values.hbbs.enabled }}
+  volumes:
+    - name: keysrc
+      secret:
+        secretName: {{ include "rustdesk-server.keySecretName" . }}
+        defaultMode: 0440
+        items:
+          - key: {{ .Values.key.privateKeyKey }}
+            path: id_ed25519
+          - key: {{ .Values.key.publicKeyKey }}
+            path: id_ed25519.pub
+  {{- end }}
+{{- end }}

@@ -1,0 +1,15 @@
+# Overlay for the in-CI install test.
+#
+# k3d has no MetalLB, and its bundled ServiceLB does not reproduce MetalLB's behaviour for a
+# mixed TCP/UDP Service with externalTrafficPolicy: Local. So the install test runs against
+# ClusterIP, which means the chart's DEFAULT path — LoadBalancer with Local — is not covered
+# here. That gap is real and is recorded in docs/adr/0002; closing it needs the end-to-end
+# test that asserts a direct connection.
+hbbs:
+  service:
+    type: ClusterIP
+  persistence:
+    size: 128Mi
+hbbr:
+  service:
+    type: ClusterIP

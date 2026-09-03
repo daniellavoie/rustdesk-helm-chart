@@ -1,0 +1,164 @@
+{{- if include "rustdesk-server.shouldGenerateKey" . }}
+{{/*
+Key provisioning runs once, as a pre-install hook.
+
+The ServiceAccount and RBAC below are hooks too, deleted the moment generation succeeds, so
+the permission to create Secrets exists only for the seconds it is needed and never becomes a
+standing grant on the namespace. Note that RBAC cannot scope `create` to a single resource
+name, which is why limiting its lifetime matters.
+
+The generated pair is written to a Secret rather than straight to the volume because the
+Secret is the source of truth: losing the volume must not disconnect every enrolled client.
+*/}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rustdesk-server.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- with .Values.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rustdesk-server.fullname" . }}-key-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rustdesk-server.fullname" . }}-key-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rustdesk-server.fullname" . }}-key-init
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rustdesk-server.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rustdesk-server.fullname" . }}-key-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "rustdesk-server.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: key-init
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "rustdesk-server.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: genkeypair
+          image: {{ include "rustdesk-server.utilsImage" . }}
+          imagePullPolicy: {{ .Values.utilsImage.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # `rustdesk-utils genkeypair` does NOT reproduce the retry loop that the
+              # server's own gen_sk uses: gen_sk regenerates until the base64 public key
+              # contains neither '/' nor ':', because those characters break the client
+              # config strings the key is pasted into. Reproduce that filter here, or we
+              # hand users a key that silently fails to paste.
+              i=0
+              while [ "$i" -lt 300 ]; do
+                out="$(rustdesk-utils genkeypair)"
+                pk="$(printf '%s\n' "$out" | sed -n 's/^Public Key:[[:space:]]*//p')"
+                sk="$(printf '%s\n' "$out" | sed -n 's/^Secret Key:[[:space:]]*//p')"
+                i=$((i + 1))
+                if [ -z "$pk" ] || [ -z "$sk" ]; then continue; fi
+                case "$pk" in *"/"* | *":"*) continue ;; esac
+                # printf '%s', never echo: the server compares the relay key byte for byte
+                # with no trimming, so a trailing newline breaks relay authentication.
+                printf '%s' "$sk" > /work/id_ed25519
+                printf '%s' "$pk" > /work/id_ed25519.pub
+                chmod 0600 /work/id_ed25519
+                echo "Generated key pair. Public key: $pk"
+                exit 0
+              done
+              echo "Failed to generate a public key free of '/' and ':' after 300 attempts" >&2
+              exit 1
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      containers:
+        # Distroless: no shell, so this step is pure arguments. --from-file preserves the
+        # files byte for byte, which is what the no-trailing-newline requirement needs.
+        - name: publish
+          image: {{ include "rustdesk-server.kubectlImage" . }}
+          imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          args:
+            - create
+            - secret
+            - generic
+            - {{ include "rustdesk-server.keySecretName" . }}
+            - --namespace={{ .Release.Namespace }}
+            - --from-file=id_ed25519=/work/id_ed25519
+            - --from-file=id_ed25519.pub=/work/id_ed25519.pub
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: work
+          emptyDir: {}
+{{- end }}

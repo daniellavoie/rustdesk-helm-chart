@@ -1,0 +1,47 @@
+apiVersion: v2
+name: rustdesk-server
+description: Self-hosted RustDesk server (hbbs + hbbr), with durable key management and source-IP preserving networking.
+type: application
+
+version: 0.1.0
+appVersion: "1.1.16"
+
+# Mixed-protocol LoadBalancer Services (TCP and UDP on one Service) reached GA in 1.26.
+# Below that the UDP port is silently dropped from the load balancer and client
+# registration never works, so this is a hard gate rather than a documented caveat.
+kubeVersion: ">=1.26.0-0"
+
+home: https://github.com/daniellavoie/rustdesk-helm-chart
+sources:
+  - https://github.com/daniellavoie/rustdesk-helm-chart
+  - https://github.com/rustdesk/rustdesk-server
+icon: https://raw.githubusercontent.com/rustdesk/rustdesk/master/res/icon.svg
+
+keywords:
+  - rustdesk
+  - remote-desktop
+  - hbbs
+  - hbbr
+  - self-hosted
+
+maintainers:
+  - name: daniellavoie
+    url: https://github.com/daniellavoie
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Chart source
+      url: https://github.com/daniellavoie/rustdesk-helm-chart
+    - name: Upstream RustDesk server
+      url: https://github.com/rustdesk/rustdesk-server
+    - name: Architecture decisions
+      url: https://github.com/daniellavoie/rustdesk-helm-chart/tree/main/docs/adr
+  artifacthub.io/images: |
+    - name: rustdesk-server
+      image: docker.io/rustdesk/rustdesk-server:1.1.16
+    - name: rustdesk-server-s6
+      image: docker.io/rustdesk/rustdesk-server-s6:1.1.16
+  artifacthub.io/signKey: |
+    fingerprint: keyless
+    url: https://github.com/daniellavoie/rustdesk-helm-chart#verifying-the-chart

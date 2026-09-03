@@ -1,0 +1,160 @@
+{{- if .Values.hbbr.enabled }}
+{{- $name := include "rustdesk-server.roleFullname" (dict "ctx" . "role" "hbbr") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" . "role" "hbbr") | nindent 4 }}
+spec:
+  {{/*
+    Keep this at 1. hbbr pairs the two peers of a session by UUID inside a single process,
+    so with two replicas behind one Service the peers land on different pods and never pair.
+    sessionAffinity does not help: the two peers have different client IPs by definition.
+    Add capacity with additional relay-only releases listed in hbbs.config.relayServers.
+  */}}
+  replicas: {{ .Values.hbbr.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbr") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rustdesk-server.roleSelectorLabels" (dict "ctx" . "role" "hbbr") | nindent 8 }}
+        {{- with .Values.hbbr.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if .Values.hbbr.lists.enabled }}
+        checksum/lists: {{ include (print $.Template.BasePath "/hbbr-configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.hbbr.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.hbbr.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.hbbr.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.hbbr.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbr.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbr.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbr.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hbbr.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hbbr
+          image: {{ include "rustdesk-server.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.hbbr.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          workingDir: {{ .Values.hbbr.dataDir }}
+          command: ["/usr/bin/hbbr"]
+          args:
+            {{/*
+              -p, never the PORT environment variable: upstream reads PORT as `port + 1`
+              for hbbr, so PORT=21117 would listen on 21118.
+
+              -k is never passed as `_` here. In a split deployment that path fabricates a
+              fresh key pair when id_ed25519 is absent and overwrites id_ed25519.pub,
+              silently desyncing from hbbs. The public key arrives via the KEY env var.
+            */}}
+            - -p
+            - {{ .Values.hbbr.port | quote }}
+            {{- with .Values.hbbr.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            {{- include "rustdesk-server.hbbr.keyEnv" . | nindent 12 }}
+            - name: SINGLE_BANDWIDTH
+              value: {{ .Values.hbbr.config.singleBandwidth | quote }}
+            - name: TOTAL_BANDWIDTH
+              value: {{ .Values.hbbr.config.totalBandwidth | quote }}
+            - name: LIMIT_SPEED
+              value: {{ .Values.hbbr.config.limitSpeed | quote }}
+            - name: DOWNGRADE_THRESHOLD
+              value: {{ .Values.hbbr.config.downgradeThreshold | quote }}
+            - name: DOWNGRADE_START_CHECK
+              value: {{ .Values.hbbr.config.downgradeStartCheck | quote }}
+            {{- with .Values.hbbr.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: relay
+              containerPort: {{ .Values.hbbr.port }}
+              protocol: TCP
+            {{- if .Values.hbbr.webClient.enabled }}
+            - name: relay-ws
+              containerPort: {{ include "rustdesk-server.hbbr.wsPort" . }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.hbbr.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: relay
+            initialDelaySeconds: {{ .Values.hbbr.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hbbr.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.hbbr.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.hbbr.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.hbbr.livenessProbe.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: relay
+            initialDelaySeconds: {{ .Values.hbbr.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hbbr.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.hbbr.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.hbbr.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- with .Values.hbbr.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.hbbr.dataDir }}
+            {{- if .Values.hbbr.lists.enabled }}
+            - name: lists
+              mountPath: {{ .Values.hbbr.dataDir }}/blacklist.txt
+              subPath: blacklist.txt
+              readOnly: true
+            - name: lists
+              mountPath: {{ .Values.hbbr.dataDir }}/blocklist.txt
+              subPath: blocklist.txt
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{/* hbbr writes nothing when the key is supplied explicitly, which it always is here. */}}
+        - name: data
+          emptyDir: {}
+        {{- if .Values.hbbr.lists.enabled }}
+        - name: lists
+          configMap:
+            name: {{ $name }}-lists
+        {{- end }}
+{{- end }}

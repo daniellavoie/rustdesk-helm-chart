@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rustdesk-server values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": { "type": "object" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "imagePullSecrets": { "type": "array", "items": { "type": "object" } },
+    "image": { "$ref": "#/$defs/image" },
+    "utilsImage": { "$ref": "#/$defs/image" },
+    "kubectlImage": { "$ref": "#/$defs/image" },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secretName": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "privateKeyKey": { "type": "string", "minLength": 1 },
+        "publicKeyKey": { "type": "string", "minLength": 1 }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "create": { "type": "boolean" } }
+    },
+    "hbbs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": {
+          "type": "integer",
+          "minimum": 1025,
+          "maximum": 65533,
+          "description": "hbbs derives port-1 and port+2 from this, so it cannot be 1024 or above 65533. Changing it also changes the relay port clients derive."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "alwaysUseRelay": { "type": "boolean" },
+            "relayServers": { "type": "array", "items": { "type": "string" } },
+            "dbUrl": { "type": "string" },
+            "rmem": { "type": "integer", "minimum": 0 },
+            "selfTest": { "type": "boolean" }
+          }
+        },
+        "service": { "$ref": "#/$defs/hbbsService" },
+        "webClient": { "$ref": "#/$defs/webClient" },
+        "hostNetwork": { "type": "boolean" },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingClaim": { "type": "string" },
+            "storageClass": { "type": "string" },
+            "accessModes": {
+              "type": "array",
+              "items": { "enum": ["ReadWriteOnce", "ReadWriteOncePod", "ReadWriteMany"] }
+            },
+            "size": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$" },
+            "annotations": { "type": "object" },
+            "retain": { "type": "boolean" }
+          }
+        },
+        "dataDir": { "type": "string", "pattern": "^/.*[^/]$" },
+        "extraEnv": { "type": "array", "items": { "type": "object" } },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "object" },
+        "livenessProbe": { "$ref": "#/$defs/probe" },
+        "readinessProbe": { "$ref": "#/$defs/probe" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "priorityClassName": { "type": "string" },
+        "podSecurityContext": { "type": "object" },
+        "containerSecurityContext": { "type": "object" }
+      }
+    },
+    "hbbr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Must be 0 or 1. hbbr pairs the two peers of a session by UUID inside one process, so with more than one replica behind a single Service the peers land on different pods and the session never pairs. Add relay capacity with additional relay-only releases listed in hbbs.config.relayServers."
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65533 },
+        "key": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "validation": { "type": "boolean" },
+            "publicKey": {
+              "type": "string",
+              "description": "Base64 public key. Never the private key: hbbr compares an opaque string and performs no cryptography."
+            },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "singleBandwidth": { "type": "integer", "minimum": 1 },
+            "totalBandwidth": { "type": "integer", "minimum": 1 },
+            "limitSpeed": { "type": "integer", "minimum": 1 },
+            "downgradeThreshold": { "type": "string" },
+            "downgradeStartCheck": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "lists": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "blacklist": { "type": "array", "items": { "type": "string" } },
+            "blocklist": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "service": { "$ref": "#/$defs/hbbrService" },
+        "webClient": { "$ref": "#/$defs/webClient" },
+        "hostNetwork": { "type": "boolean" },
+        "dataDir": { "type": "string", "pattern": "^/.*[^/]$" },
+        "extraEnv": { "type": "array", "items": { "type": "object" } },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "object" },
+        "livenessProbe": { "$ref": "#/$defs/probe" },
+        "readinessProbe": { "$ref": "#/$defs/probe" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "priorityClassName": { "type": "string" },
+        "podSecurityContext": { "type": "object" },
+        "containerSecurityContext": { "type": "object" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "extraEgress": { "type": "array" }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registry": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "tcpSocket": { "type": "boolean" },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "webClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "serviceCommon": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["LoadBalancer", "NodePort", "ClusterIP"] },
+        "externalTrafficPolicy": {
+          "enum": ["Local", "Cluster"],
+          "description": "Local preserves the client source IP, which hbbs stores as the peer's NAT endpoint. Cluster rewrites it and silently forces every session through the relay."
+        },
+        "loadBalancerIP": { "type": "string" },
+        "loadBalancerClass": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "hbbsService": {
+      "allOf": [{ "$ref": "#/$defs/serviceCommon" }],
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": true, "externalTrafficPolicy": true, "loadBalancerIP": true,
+        "loadBalancerClass": true, "annotations": true,
+        "nodePorts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "natTest": { "type": ["integer", "null"] },
+            "main": { "type": ["integer", "null"] },
+            "websocket": { "type": ["integer", "null"] }
+          }
+        }
+      }
+    },
+    "hbbrService": {
+      "allOf": [{ "$ref": "#/$defs/serviceCommon" }],
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": true, "externalTrafficPolicy": true, "loadBalancerIP": true,
+        "loadBalancerClass": true, "annotations": true,
+        "nodePorts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "main": { "type": ["integer", "null"] },
+            "websocket": { "type": ["integer", "null"] }
+          }
+        }
+      }
+    }
+  }
+}

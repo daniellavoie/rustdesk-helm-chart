@@ -1,0 +1,10 @@
+# A relay-only release: hbbr alone, taking the installation's public key explicitly.
+# Exercises the template guard that refuses to start an unvalidated relay.
+hbbs:
+  enabled: false
+hbbr:
+  service:
+    type: ClusterIP
+  key:
+    validation: true
+    publicKey: "AZcv2b44gxVeMMWKicq0gl3lnZk3EE8ww1PIsFkwIZU="
