@@ -29,8 +29,18 @@ jobs:
           test "$tag" = "$chart" || {
             echo "tag $tag does not match Chart.yaml version $chart" >&2; exit 1; }
 
+      # Two logins, deliberately. `helm registry login` writes Helm's own credential store;
+      # cosign reads the Docker one. Without the second, signing gets a certificate and a
+      # transparency log entry and then fails UNAUTHORIZED when uploading the signature --
+      # leaving a published but unsigned artifact.
       - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -eu
+          echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          echo "$TOKEN" | cosign login ghcr.io -u "$ACTOR" --password-stdin
 
       - name: Package and push
         id: push
