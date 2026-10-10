@@ -41,6 +41,11 @@ is stateless and can be deployed on its own as a relay-only release. Neither can
 replica count — see [ADR-0001](docs/adr/0001-split-roles-classic-image.md) for why the relay
 in particular cannot.
 
+**Optionally, a tailnet instead of the internet.** Reference a pre-auth key Secret for each
+role and it joins your tailnet (Tailscale, or Headscale via `tailscale.loginServer`) as its own
+node, through a kernel-mode sidecar that keeps peer addresses intact. Off by default; see
+[exposure](docs/exposure.md) and [ADR-0009](docs/adr/0009-tailscale-sidecar.md).
+
 ## Requirements
 
 Kubernetes 1.26 or newer. The floor is enforced in `Chart.yaml` because hbbs needs TCP and UDP

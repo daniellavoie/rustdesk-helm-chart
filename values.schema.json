@@ -11,6 +11,26 @@
     "image": { "$ref": "#/$defs/image" },
     "utilsImage": { "$ref": "#/$defs/image" },
     "kubectlImage": { "$ref": "#/$defs/image" },
+    "tailscale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/$defs/image" },
+        "loginServer": {
+          "type": "string",
+          "pattern": "^$|^https?://",
+          "description": "Coordination server URL (--login-server). Empty for Tailscale's own control plane."
+        },
+        "magicDNSDomain": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+          "description": "Tailnet DNS suffix (Headscale's dns.base_domain). Derives hbbs's relay from hbbr's tailnet name."
+        },
+        "extraArgs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "object" },
+        "securityContext": { "type": "object" }
+      }
+    },
     "key": {
       "type": "object",
       "additionalProperties": false,
@@ -60,6 +80,7 @@
         "service": { "$ref": "#/$defs/hbbsService" },
         "webClient": { "$ref": "#/$defs/webClient" },
         "hostNetwork": { "type": "boolean" },
+        "tailscale": { "$ref": "#/$defs/roleTailscale" },
         "persistence": {
           "type": "object",
           "additionalProperties": false,
@@ -141,6 +162,7 @@
         "service": { "$ref": "#/$defs/hbbrService" },
         "webClient": { "$ref": "#/$defs/webClient" },
         "hostNetwork": { "type": "boolean" },
+        "tailscale": { "$ref": "#/$defs/roleTailscale" },
         "dataDir": { "type": "string", "pattern": "^/.*[^/]$" },
         "extraEnv": { "type": "array", "items": { "type": "object" } },
         "extraArgs": { "type": "array", "items": { "type": "string" } },
@@ -173,6 +195,28 @@
     }
   },
   "$defs": {
+    "roleTailscale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": {
+              "type": "string",
+              "description": "Secret holding this role's pre-auth key. Setting it adds the Tailscale sidecar."
+            },
+            "key": { "type": "string", "minLength": 1 }
+          }
+        },
+        "hostname": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Tailnet hostname, a DNS label. Defaults to the role's resource name."
+        }
+      }
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,

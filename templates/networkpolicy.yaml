@@ -1,6 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- range $role := (list "hbbs" "hbbr") }}
 {{- $cfg := index $.Values $role }}
+{{- $tailnet := include "rustdesk-server.tailscale.enabled" (dict "ctx" $ "role" $role) }}
 {{- if $cfg.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -42,6 +43,11 @@ spec:
           protocol: TCP
         {{- end }}
         {{- end }}
+        {{- if $tailnet }}
+        {{- /* WireGuard from tailnet peers. Without it every session falls back to DERP. */}}
+        - port: 41641
+          protocol: UDP
+        {{- end }}
   egress:
     - ports:
         - port: 53
@@ -52,6 +58,13 @@ spec:
     {{/*
       hbbs only starts its relay health check when more than one relay is configured; that
       check is the sole outbound connection it makes.
+    */}}
+    - {}
+    {{- else if $tailnet }}
+    {{- /*
+      The Tailscale sidecar shares the pod's network namespace, and so this policy. It must
+      reach the coordination server, DERP relays and every peer's WireGuard endpoint, none
+      of which have addresses known at install time.
     */}}
     - {}
     {{- end }}

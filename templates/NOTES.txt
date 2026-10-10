@@ -11,6 +11,55 @@
    The Secret is the source of truth; the volume is only a cache of it. It is not owned by
    Helm, so it deliberately survives `helm uninstall` and a later reinstall will reuse it.
 
+{{- if include "rustdesk-server.tailscale.any" . }}
+
+   TAILNET: each role has joined your tailnet as its own node{{ with .Values.tailscale.loginServer }} on {{ . }}{{ end }}.
+   Their addresses are known only once they have logged in; tailscaled records them in
+   its state Secret:
+{{- range $role := (list "hbbs" "hbbr") }}
+{{- if include "rustdesk-server.tailscale.enabled" (dict "ctx" $ "role" $role) }}
+
+     {{ $role }} ({{ include "rustdesk-server.tailscale.hostname" (dict "ctx" $ "role" $role) }}):
+       kubectl get secret -n {{ $.Release.Namespace }} {{ include "rustdesk-server.tailscale.stateSecretName" (dict "ctx" $ "role" $role) }} \
+         -o jsonpath='{.data.device_ips}' | base64 -d; echo
+{{- end }}
+{{- end }}
+
+{{- $relay := include "rustdesk-server.hbbs.relayServers" . }}
+{{- if and .Values.hbbs.enabled (include "rustdesk-server.tailscale.fqdn" (dict "ctx" . "role" "hbbs")) }}
+
+   Clients on the tailnet are configured by name, so nothing changes if the addresses do:
+
+     ID Server:    {{ include "rustdesk-server.tailscale.fqdn" (dict "ctx" . "role" "hbbs") }}
+     Key:          <the public key from step 1>
+     Relay Server: leave EMPTY. hbbs hands clients {{ $relay | default "no relay" }}.
+
+   Those names resolve through Tailscale DNS on each client (accepted by default). They
+   assume the hostnames are unique on the tailnet: if an older node already holds one, the
+   coordination server renames the new node and these names point at the old one.
+{{- else if not .Values.hbbs.enabled }}
+{{- with include "rustdesk-server.tailscale.fqdn" (dict "ctx" . "role" "hbbr") }}
+
+   Add "{{ . }}:{{ $.Values.hbbr.port }}" to hbbs.config.relayServers of the release that runs hbbs.
+{{- end }}
+{{- else }}
+
+   Clients on the tailnet use the hbbs address as their ID server. hbbs and hbbr are two
+   different nodes, so the relay a client would derive (<ID server>:{{ add (int .Values.hbbs.port) 1 }}) points at hbbs,
+   where nothing listens. Set tailscale.magicDNSDomain to your tailnet's DNS suffix (for
+   Headscale, its dns.base_domain) and the chart names hbbr as the relay for you, or set
+   hbbs.config.relayServers to "<hbbr address>:{{ .Values.hbbr.port }}".
+{{- if and .Values.hbbr.enabled (not $relay) }}
+
+   WARNING: no relay is configured for tailnet clients, so relayed sessions will fail
+   until one of the two settings above is made.
+{{- end }}
+{{- end }}
+
+   If clients reach this server only over the tailnet, the Services can be ClusterIP and
+   steps 2 and 3 below do not apply beyond the key.
+{{- end }}
+
 2. Find the address clients should use:
 {{- if eq .Values.hbbs.service.type "LoadBalancer" }}
 

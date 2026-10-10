@@ -1,0 +1,80 @@
+{{- include "rustdesk-server.tailscale.validate" . }}
+{{- if include "rustdesk-server.tailscale.any" . }}
+{{/*
+Standing identity for the Tailscale sidecars, separate from the key-init hook's
+ServiceAccount, which is deleted the moment the key is generated. Only the sidecar
+container mounts its token (a projected volume); the pods keep
+automountServiceAccountToken: false, so the RustDesk containers never see it.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rustdesk-server.tailscale.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+{{/*
+tailscaled reads and rewrites its own node state, nothing else. The state Secrets are
+created by the chart below, so no `create` grant is needed — and RBAC could not have
+scoped one to these names anyway.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rustdesk-server.tailscale.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range $role := (list "hbbs" "hbbr") }}
+      {{- if include "rustdesk-server.tailscale.enabled" (dict "ctx" $ "role" $role) }}
+      - {{ include "rustdesk-server.tailscale.stateSecretName" (dict "ctx" $ "role" $role) }}
+      {{- end }}
+      {{- end }}
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rustdesk-server.tailscale.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rustdesk-server.tailscale.serviceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rustdesk-server.tailscale.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- range $role := (list "hbbs" "hbbr") }}
+{{- if include "rustdesk-server.tailscale.enabled" (dict "ctx" $ "role" $role) }}
+---
+{{/*
+Node state, written by tailscaled. The chart declares the object but never its data, so
+upgrades leave what tailscaled wrote alone. Kept on uninstall for the same reason the key
+pair is: a reinstall then comes back as the same tailnet node, at the same address, rather
+than as a new one every client would have to be re-pointed at.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "rustdesk-server.tailscale.stateSecretName" (dict "ctx" $ "role" $role) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "rustdesk-server.roleLabels" (dict "ctx" $ "role" $role) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+{{- end }}
+{{- end }}
+{{- end }}

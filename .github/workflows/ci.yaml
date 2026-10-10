@@ -41,6 +41,11 @@ jobs:
           expect_fail --set hbbs.service.type=Bogus
           # A relay-only release must refuse to start an unvalidated relay open to anyone.
           expect_fail --set hbbs.enabled=false
+          # Tailscale: a release is on the tailnet entirely or not at all, and never with hostNetwork.
+          expect_fail --set hbbs.tailscale.authKey.existingSecret=k
+          expect_fail --set hbbs.tailscale.authKey.existingSecret=k \
+            --set hbbr.tailscale.authKey.existingSecret=k --set hbbs.hostNetwork=true
+          expect_fail --set tailscale.loginServer=headscale.example.com
 
       - name: Install kubeconform
         run: |
@@ -67,6 +72,24 @@ jobs:
           check "existing secret" --set key.existingSecret=k --set rbac.create=false \
             --set serviceAccount.create=false
           check "multi-relay" --set hbbs.config.relayServers='{a.example.com,b.example.com}'
+          check "tailscale sidecars + netpol" \
+            --set hbbs.tailscale.authKey.existingSecret=ts-hbbs \
+            --set hbbr.tailscale.authKey.existingSecret=ts-hbbr \
+            --set tailscale.loginServer=https://headscale.example.com \
+            --set networkPolicy.enabled=true
+          check "tailscale relay-only" --set hbbs.enabled=false --set hbbr.key.publicKey=abc \
+            --set hbbr.tailscale.authKey.existingSecret=ts-hbbr
+
+      - name: Tailnet relay is derived from hbbr's name, and an explicit list still wins
+        run: |
+          set -eu
+          ts="--set hbbs.tailscale.authKey.existingSecret=a --set hbbr.tailscale.authKey.existingSecret=b"
+          helm template t . $ts --set tailscale.magicDNSDomain=tn.example \
+            --set hbbr.tailscale.hostname=relay | grep -q '"relay.tn.example:21117"'
+          helm template t . $ts --set tailscale.magicDNSDomain=tn.example \
+            --set hbbs.config.relayServers='{r.example.com}' | grep -q '"r.example.com"'
+          ! helm template t . $ts | grep -q -- '- -r'
+          echo ok
 
       - name: README is in sync with values.yaml
         run: |

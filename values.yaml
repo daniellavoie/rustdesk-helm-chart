@@ -52,6 +52,49 @@ key:
   # -- Key within `existingSecret` holding the base64 public key.
   publicKeyKey: id_ed25519.pub
 
+tailscale:
+  # Shared settings for the optional Tailscale sidecars. A role gets a sidecar only when
+  # its own `<role>.tailscale.authKey.existingSecret` is set, which joins that pod to a
+  # tailnet (Tailscale, or a Headscale control server via `loginServer`) under its own
+  # node identity. Every enabled role must then have one, so a release is either fully on
+  # the tailnet or not at all. See docs/exposure.md and docs/adr/0009.
+  image:
+    registry: docker.io
+    repository: tailscale/tailscale
+    # -- Pinned, like every image in this chart: a floating tag changes networking code
+    # under a running install.
+    tag: "v1.102.5"
+    pullPolicy: IfNotPresent
+  # -- Coordination server URL passed as `--login-server`. Leave empty for Tailscale's own
+  # control plane; set it to your Headscale URL otherwise.
+  loginServer: ""
+  # -- The tailnet's DNS suffix: Headscale's `dns.base_domain`, or your tailnet's
+  # `*.ts.net` name. When set, hbbs is given hbbr's tailnet name as its relay
+  # (`<hbbr hostname>.<this>:<hbbr.port>`) at install time, so nothing has to be configured
+  # after the pods join. Clients resolve that name, not hbbs, so it relies on their
+  # Tailscale DNS, which clients accept by default. An explicit `hbbs.config.relayServers`
+  # always wins.
+  magicDNSDomain: ""
+  # -- Extra `tailscale up` flags, appended to TS_EXTRA_ARGS (for example `--advertise-tags`).
+  extraArgs: []
+  # -- Set a tun device plugin's resource here (for example `squat.ai/tun: 1`) when
+  # running the sidecar unprivileged.
+  resources: {}
+  # -- Privileged by default, and that is a requirement rather than a convenience.
+  # The sidecar runs in kernel mode so hbbs sees each peer's real tailnet address (in
+  # userspace mode every connection would arrive from 127.0.0.1, breaking hole punching).
+  # Kernel mode opens /dev/net/tun, and on containerd an unprivileged container can create
+  # that device node but not open it: NET_ADMIN alone fails with "operation not permitted".
+  # Only the sidecar is privileged; the RustDesk containers keep their own restricted
+  # context. If your cluster runs a tun device plugin, replace this with
+  # `capabilities.add: [NET_ADMIN, NET_RAW]` and request the plugin's resource above.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    runAsNonRoot: false
+    privileged: true
+    readOnlyRootFilesystem: true
+
 serviceAccount:
   # -- Create a ServiceAccount for the key-provisioning initContainers.
   create: true
@@ -140,6 +183,18 @@ hbbs:
   # upstream's own documentation recommends and it guarantees the real source IP, at the
   # cost of pinning the pod to a node and claiming ports 21115-21119 across the cluster.
   hostNetwork: false
+
+  tailscale:
+    authKey:
+      # -- Name of a Secret holding a pre-auth key for this role. Setting it adds the
+      # Tailscale sidecar to this role's pod. The key is only used for the first login:
+      # node state is then kept in a Secret the chart creates, so restarts keep the same
+      # tailnet identity and address instead of registering a new node.
+      existingSecret: ""
+      # -- Key within `existingSecret` holding the pre-auth key.
+      key: authkey
+    # -- Tailnet hostname. Defaults to the role's resource name (`<fullname>-hbbs`).
+    hostname: ""
 
   persistence:
     enabled: true
@@ -277,6 +332,18 @@ hbbr:
     enabled: false
 
   hostNetwork: false
+
+  tailscale:
+    authKey:
+      # -- Name of a Secret holding a pre-auth key for this role. Setting it adds the
+      # Tailscale sidecar to this role's pod. The key is only used for the first login:
+      # node state is then kept in a Secret the chart creates, so restarts keep the same
+      # tailnet identity and address instead of registering a new node.
+      existingSecret: ""
+      # -- Key within `existingSecret` holding the pre-auth key.
+      key: authkey
+    # -- Tailnet hostname. Defaults to the role's resource name (`<fullname>-hbbr`).
+    hostname: ""
 
   # -- Working directory. hbbr writes nothing here when a key is supplied explicitly,
   # which is what this chart always does.

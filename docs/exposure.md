@@ -119,6 +119,57 @@ The costs are real: the ports are claimed cluster-wide on that node, the pods ar
 wherever those ports are free, and a port collision is a scheduling failure rather than a
 configuration error.
 
+## Option 4: a tailnet, through the Tailscale sidecar
+
+For servers that only your own devices should reach, each role can join a tailnet (Tailscale,
+or Headscale) as its own node. Nothing is exposed to the internet, and no port forwarding is
+needed.
+
+```yaml
+tailscale:
+  loginServer: https://headscale.example.com   # omit for Tailscale's own control plane
+  magicDNSDomain: headscale.example.com         # Headscale's dns.base_domain
+hbbs:
+  service:
+    type: ClusterIP
+  tailscale:
+    authKey:
+      existingSecret: rustdesk-hbbs-tailscale   # holds a pre-auth key under `authkey`
+hbbr:
+  service:
+    type: ClusterIP
+  tailscale:
+    authKey:
+      existingSecret: rustdesk-hbbr-tailscale
+```
+
+Why a sidecar and not a subnet router: a subnet router SNATs, so hbbs would see the router as
+every peer's source, the same silent relay fallback described above. The sidecar gives the pod
+its own tailnet address and runs in kernel mode, so the peer's real address arrives intact.
+
+Three things to know:
+
+1. **Both roles or neither.** The chart refuses a release where only one role has a key.
+2. **The relay is named, not derived.** hbbs and hbbr are separate nodes with separate
+   addresses, so the relay a client would derive from the ID server address points at hbbs.
+   With `tailscale.magicDNSDomain` set, the chart passes hbbs
+   `<hbbr hostname>.<domain>:<hbbr.port>` at install time; nothing needs configuring after
+   the pods join. Clients set the ID server to `<hbbs hostname>.<domain>` and the key, and
+   leave the relay empty. They resolve both names through Tailscale DNS, which clients accept
+   by default. Without a DNS suffix, set `hbbs.config.relayServers` to hbbr's tailnet address
+   instead (NOTES prints how to read it).
+
+   Names are only predictable while unique: if an older node on the tailnet already has the
+   hostname, the coordination server renames the new one. Keeping the state Secrets (the
+   default) avoids that across reinstalls.
+3. **The sidecar is privileged.** Kernel mode needs `/dev/net/tun`, which containerd does not
+   let an unprivileged container open. See `tailscale.securityContext` and ADR-0009.
+
+Node state lives in a `<role>-tailscale-state` Secret that the chart creates and keeps on
+uninstall, so the nodes keep their addresses across restarts, upgrades and reinstalls. Use a
+reusable pre-auth key only if you accept that anyone holding it can join your tailnet; a
+single-use key is enough, since it is only spent on the first login.
+
 ## Verifying you got it right
 
 A working session proves less than you would think, because the relay fallback hides the

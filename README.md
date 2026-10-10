@@ -2,7 +2,7 @@
 
 Self-hosted RustDesk server (hbbs + hbbr), with durable key management and source-IP preserving networking.
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.1.16](https://img.shields.io/badge/AppVersion-1.1.16-informational?style=flat-square)
+![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.1.16](https://img.shields.io/badge/AppVersion-1.1.16-informational?style=flat-square)
 
 A Helm chart for the self-hosted [RustDesk server](https://github.com/rustdesk/rustdesk-server),
 built around the three things that make RustDesk unusual to run on Kubernetes: it needs the
@@ -41,6 +41,11 @@ is stateless and can be deployed on its own as a relay-only release. Neither can
 replica count — see [ADR-0001](docs/adr/0001-split-roles-classic-image.md) for why the relay
 in particular cannot.
 
+**Optionally, a tailnet instead of the internet.** Reference a pre-auth key Secret for each
+role and it joins your tailnet (Tailscale, or Headscale via `tailscale.loginServer`) as its own
+node, through a kernel-mode sidecar that keeps peer addresses intact. Off by default; see
+[exposure](docs/exposure.md) and [ADR-0009](docs/adr/0009-tailscale-sidecar.md).
+
 ## Requirements
 
 Kubernetes 1.26 or newer. The floor is enforced in `Chart.yaml` because hbbs needs TCP and UDP
@@ -71,7 +76,7 @@ Releases are signed with [cosign](https://docs.sigstore.dev/) keyless signing, t
 GitHub Actions workflow that built them:
 
 ```bash
-cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:0.1.0 \
+cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:0.2.0 \
   --certificate-identity-regexp 'https://github.com/daniellavoie/rustdesk-helm-chart/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -143,6 +148,9 @@ cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:0.1.0 \
 | hbbr.service.nodePorts.main | string | `nil` |  |
 | hbbr.service.nodePorts.websocket | string | `nil` |  |
 | hbbr.service.type | string | `"LoadBalancer"` |  |
+| hbbr.tailscale.authKey.existingSecret | string | `""` | Name of a Secret holding a pre-auth key for this role. Setting it adds the Tailscale sidecar to this role's pod. The key is only used for the first login: node state is then kept in a Secret the chart creates, so restarts keep the same tailnet identity and address instead of registering a new node. |
+| hbbr.tailscale.authKey.key | string | `"authkey"` | Key within `existingSecret` holding the pre-auth key. |
+| hbbr.tailscale.hostname | string | `""` | Tailnet hostname. Defaults to the role's resource name (`<fullname>-hbbr`). |
 | hbbr.tolerations | list | `[]` |  |
 | hbbr.topologySpreadConstraints | list | `[]` |  |
 | hbbr.webClient.enabled | bool | `false` | Expose the WebSocket relay on `port + 2` (21119 by default). Carries the same unvalidated-header risk as `hbbs.webClient.enabled`. |
@@ -198,6 +206,9 @@ cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:0.1.0 \
 | hbbs.service.nodePorts.natTest | string | `nil` |  |
 | hbbs.service.nodePorts.websocket | string | `nil` |  |
 | hbbs.service.type | string | `"LoadBalancer"` | `LoadBalancer` preserves the client source IP when paired with `externalTrafficPolicy: Local`, which is a correctness requirement rather than a preference: hbbs stores the observed packet source as the peer's NAT endpoint and hands it to the other peer to dial. Behind any SNAT-ing hop, every session silently falls back through the relay. |
+| hbbs.tailscale.authKey.existingSecret | string | `""` | Name of a Secret holding a pre-auth key for this role. Setting it adds the Tailscale sidecar to this role's pod. The key is only used for the first login: node state is then kept in a Secret the chart creates, so restarts keep the same tailnet identity and address instead of registering a new node. |
+| hbbs.tailscale.authKey.key | string | `"authkey"` | Key within `existingSecret` holding the pre-auth key. |
+| hbbs.tailscale.hostname | string | `""` | Tailnet hostname. Defaults to the role's resource name (`<fullname>-hbbs`). |
 | hbbs.tolerations | list | `[]` |  |
 | hbbs.topologySpreadConstraints | list | `[]` |  |
 | hbbs.webClient.enabled | bool | `false` | Expose the WebSocket transport on `port + 2` (21118 by default). Off by default: this port accepts `X-Real-IP` and `X-Forwarded-For` without validation and overwrites the peer's address with whatever the header claims, so anyone who can reach it directly can present themselves as any source IP. Only enable it behind a proxy that OVERWRITES those headers rather than passing them through. This chart ships no Ingress; see docs/adr/0006. |
@@ -221,6 +232,15 @@ cosign verify ghcr.io/daniellavoie/helm-charts/rustdesk-server:0.1.0 \
 | serviceAccount.annotations | object | `{}` |  |
 | serviceAccount.create | bool | `true` | Create a ServiceAccount for the key-provisioning initContainers. |
 | serviceAccount.name | string | `""` | Use an existing ServiceAccount instead. Ignored when `create` is true. |
+| tailscale.extraArgs | list | `[]` | Extra `tailscale up` flags, appended to TS_EXTRA_ARGS (for example `--advertise-tags`). |
+| tailscale.image.pullPolicy | string | `"IfNotPresent"` |  |
+| tailscale.image.registry | string | `"docker.io"` |  |
+| tailscale.image.repository | string | `"tailscale/tailscale"` |  |
+| tailscale.image.tag | string | `"v1.102.5"` | Pinned, like every image in this chart: a floating tag changes networking code under a running install. |
+| tailscale.loginServer | string | `""` | Coordination server URL passed as `--login-server`. Leave empty for Tailscale's own control plane; set it to your Headscale URL otherwise. |
+| tailscale.magicDNSDomain | string | `""` | The tailnet's DNS suffix: Headscale's `dns.base_domain`, or your tailnet's `*.ts.net` name. When set, hbbs is given hbbr's tailnet name as its relay (`<hbbr hostname>.<this>:<hbbr.port>`) at install time, so nothing has to be configured after the pods join. Clients resolve that name, not hbbs, so it relies on their Tailscale DNS, which clients accept by default. An explicit `hbbs.config.relayServers` always wins. |
+| tailscale.resources | object | `{}` | Set a tun device plugin's resource here (for example `squat.ai/tun: 1`) when running the sidecar unprivileged. |
+| tailscale.securityContext | object | `{"privileged":true,"readOnlyRootFilesystem":true,"runAsGroup":0,"runAsNonRoot":false,"runAsUser":0}` | Privileged by default, and that is a requirement rather than a convenience. The sidecar runs in kernel mode so hbbs sees each peer's real tailnet address (in userspace mode every connection would arrive from 127.0.0.1, breaking hole punching). Kernel mode opens /dev/net/tun, and on containerd an unprivileged container can create that device node but not open it: NET_ADMIN alone fails with "operation not permitted". Only the sidecar is privileged; the RustDesk containers keep their own restricted context. If your cluster runs a tun device plugin, replace this with `capabilities.add: [NET_ADMIN, NET_RAW]` and request the plugin's resource above. |
 | tests.enabled | bool | `true` | Ship a `helm test` Pod that asserts the Services have endpoints and the key Secret exists and is non-empty. It runs inside the cluster, so it cannot exercise the LoadBalancer path, `externalTrafficPolicy`, or UDP. |
 | utilsImage.pullPolicy | string | `"IfNotPresent"` |  |
 | utilsImage.registry | string | `"docker.io"` |  |

@@ -47,3 +47,9 @@ _Avoid_: the supervised image, the all-in-one image
 **Relay-only release**:
 An installation of this chart with hbbs disabled, providing additional relay capacity at its own address. The only supported way to add relay capacity, since a single relay cannot be scaled by replica count.
 _Avoid_: relay node, relay worker, secondary relay
+
+**Tailscale sidecar**:
+The optional container that joins a role's pod to a tailnet as its own node, in kernel mode so
+hbbs still sees real peer addresses. Enabled per role by referencing a pre-auth key Secret, and
+only for every enabled role at once. See docs/adr/0009.
+_Avoid_: tailnet proxy, subnet router (a different, SNAT-ing thing)
